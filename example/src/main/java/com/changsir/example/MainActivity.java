@@ -43,7 +43,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     /**
-     * 权限
+     * 权限1
      */
     @AfterPermissionGranted(101)
     private void methodRequiresTwoPermission() {
