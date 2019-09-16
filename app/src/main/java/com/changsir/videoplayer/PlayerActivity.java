@@ -5,6 +5,7 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.constraintlayout.widget.Group;
 
 import android.graphics.PixelFormat;
+import android.os.AsyncTask;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Message;
@@ -206,11 +207,19 @@ public class PlayerActivity extends AppCompatActivity implements SurfaceHolder.C
 
     @Override
     protected void onDestroy() {
-        hikviHandler.removeCallbacksAndMessages(null);
-        hikviUtil.logoutDevice();
-        hikviUtil.destory();
+        new Thread(new DestoryHkhandler()).start();
         Log.e(TAG, "销毁资源");
         super.onDestroy();
+    }
+
+    class DestoryHkhandler implements Runnable {
+        @Override
+        public void run() {
+            Log.e(TAG, "开始销毁资源");
+            hikviHandler.removeCallbacksAndMessages(null);
+            hikviUtil.logoutDevice();
+            hikviUtil.destory();
+        }
     }
 
     @Override
