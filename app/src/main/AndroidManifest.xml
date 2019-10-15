@@ -14,9 +14,7 @@
 
         <activity android:name=".PlayerActivity"
             android:configChanges="orientation|keyboardHidden|screenSize"
-            android:keepScreenOn="true"
-            android:theme="@style/AppThemeFullScreen"
-            android:screenOrientation="landscape"/>
+            android:keepScreenOn="true"/>
 
     </application>
 

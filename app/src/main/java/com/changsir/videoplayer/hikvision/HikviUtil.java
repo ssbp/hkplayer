@@ -1,23 +1,35 @@
 package com.changsir.videoplayer.hikvision;
 
+import android.os.Handler;
 import android.os.Message;
 import android.util.Log;
 import android.view.SurfaceView;
 
-import com.changsir.videoplayer.PlayerActivity;
+import androidx.annotation.NonNull;
+
+import com.changsir.videoplayer.hikvision.utils.OnHikviOptListener;
 import com.hikvision.netsdk.ExceptionCallBack;
 import com.hikvision.netsdk.HCNetSDK;
 import com.hikvision.netsdk.NET_DVR_DEVICEINFO_V30;
 import com.hikvision.netsdk.NET_DVR_DIGITAL_CHANNEL_STATE;
+import com.hikvision.netsdk.NET_DVR_FILECOND;
+import com.hikvision.netsdk.NET_DVR_FINDDATA_V30;
 import com.hikvision.netsdk.NET_DVR_PICCFG_V30;
 import com.hikvision.netsdk.NET_DVR_PREVIEWINFO;
+import com.hikvision.netsdk.NET_DVR_PTZCFG;
 import com.hikvision.netsdk.RealPlayCallBack;
 
 import org.MediaPlayer.PlayM4.Player;
 
 import java.io.UnsupportedEncodingException;
 import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.List;
+
+import static com.jna.HCNetSDKByJNA.NET_DVR_FILE_NOFIND;
+import static com.jna.HCNetSDKByJNA.NET_DVR_FILE_SUCCESS;
+import static com.jna.HCNetSDKByJNA.NET_DVR_ISFINDING;
+import static com.jna.HCNetSDKByJNA.NET_DVR_NOMOREFILE;
 
 /**
  * 海康SDK工具类
@@ -40,15 +52,14 @@ public class HikviUtil {
     private int m_iPort = -1; // play port
     private int m_iStartChan = 0; // 起始通道号
     private int m_iChanNum = 0; // 通道数量
-    private boolean m_bNeedDecode = true;
     private boolean m_bStopPlayback = false;
 
-    private SurfaceView surfaceView;
+    private PlayerHandler playerHandler;
 
-    private PlayerActivity.HikviHandler hikviHandler;
 
     /**
      * 初始化
+     *
      * @param address
      * @param port
      * @param username
@@ -64,7 +75,7 @@ public class HikviUtil {
     }
 
     public boolean init(VideoModel videoModel) {
-        if(null == videoModel)
+        if (null == videoModel)
             return false;
 
         this.address = videoModel.getAddress();
@@ -73,11 +84,6 @@ public class HikviUtil {
         this.port = videoModel.getPort();
 
         return initSdk();
-    }
-
-    public HikviUtil(SurfaceView surfaceView, PlayerActivity.HikviHandler hikviHandler) {
-        this.surfaceView = surfaceView;
-        this.hikviHandler = hikviHandler;
     }
 
     /**
@@ -105,52 +111,161 @@ public class HikviUtil {
         return HCNetSDK.getInstance().NET_DVR_Cleanup();
     }
 
-    public void startPreview(int chanNum) {
-        try {
-            if (m_iLogID < 0) {
-                Log.e(TAG, "请先登录");
-                sendMsg(0, "视频未认证");
-                return;
-            }
-            if (m_bNeedDecode) {
-                if (m_iPlayID < 0) {
-                    startSinglePreview(chanNum);
-                } else {
-                    stopSinglePreview();
-                }
-            }
-        } catch (Exception err) {
-            Log.e(TAG, "error: " + err.toString());
-            sendMsg(0, "视频播放失败");
+    /**
+     * 获取回放列表
+     */
+    public List<NET_DVR_FINDDATA_V30> getPlayBackList(int channel, Calendar start, Calendar end) {
+
+        List<NET_DVR_FINDDATA_V30> playBackList = new ArrayList<>();
+
+        NET_DVR_FILECOND net_dvr_filecond = new NET_DVR_FILECOND();
+        net_dvr_filecond.dwFileType = 0xFF;
+        net_dvr_filecond.lChannel = channel; //通道号
+        net_dvr_filecond.dwIsLocked = 0xFF;
+        net_dvr_filecond.dwUseCardNo = 0;
+        net_dvr_filecond.struStartTime.dwYear = start.get(Calendar.YEAR); //开始时间
+        net_dvr_filecond.struStartTime.dwMonth = start.get(Calendar.MONTH) + 1;
+        net_dvr_filecond.struStartTime.dwDay = start.get(Calendar.DAY_OF_MONTH) ;
+        net_dvr_filecond.struStartTime.dwHour = start.get(Calendar.HOUR_OF_DAY);
+        net_dvr_filecond.struStartTime.dwMinute = start.get(Calendar.MINUTE);
+        net_dvr_filecond.struStartTime.dwSecond = start.get(Calendar.SECOND);
+        net_dvr_filecond.struStopTime.dwYear = end.get(Calendar.YEAR); //结束时间
+        net_dvr_filecond.struStopTime.dwMonth = end.get(Calendar.MONTH) + 1;
+        net_dvr_filecond.struStopTime.dwDay = end.get(Calendar.DAY_OF_MONTH);
+        net_dvr_filecond.struStopTime.dwHour = end.get(Calendar.HOUR_OF_DAY);
+        net_dvr_filecond.struStopTime.dwMinute = end.get(Calendar.MINUTE);
+        net_dvr_filecond.struStopTime.dwSecond = end.get(Calendar.SECOND);
+
+        int lFindHandle = HCNetSDK.getInstance().NET_DVR_FindFile_V30(m_iLogID, net_dvr_filecond);
+
+        if (lFindHandle < 0) {
+            Log.e(TAG, "查找录像文件失败:" + HCNetSDK.getInstance().NET_DVR_GetLastError());
+            return null;
         }
+
+        //获取录像内容
+        while (true) {
+            NET_DVR_FINDDATA_V30 net_dvr_finddata_v30 = new NET_DVR_FINDDATA_V30();
+            int findResult = HCNetSDK.getInstance().NET_DVR_FindNextFile_V30(lFindHandle, net_dvr_finddata_v30);
+            if (findResult == NET_DVR_ISFINDING) {
+                continue;
+            } else if (findResult == NET_DVR_FILE_SUCCESS) {
+                playBackList.add(0, net_dvr_finddata_v30);
+            } else if (findResult == NET_DVR_FILE_NOFIND || findResult == NET_DVR_NOMOREFILE) {
+                Log.e(TAG, "查找录像文件结束:" + HCNetSDK.getInstance().NET_DVR_GetLastError());
+                break;
+            } else {
+                Log.e(TAG, "查找录像文件详细失败:" + HCNetSDK.getInstance().NET_DVR_GetLastError());
+                break;
+            }
+        }
+
+        //停止查找
+        if (lFindHandle >= 0) {
+            HCNetSDK.getInstance().NET_DVR_FindClose_V30(lFindHandle);
+        }
+
+        //按文件播放，需要先查找
+//        HCNetSDK.getInstance().NET_DVR_PlayBackByName()
+        return playBackList;
     }
 
     /**
-     * 发送handler
-     * @param code
-     * @param content
+     * 根据文件名回放数据
+     * @param name
+     * @param surfaceView
      */
-    private void sendMsg(int code, String content) {
-        Message msg = hikviHandler.obtainMessage();
-        msg.what = code;
-        msg.obj = content;
-        msg.sendToTarget();
+    public void startPlayBackByName(String name, SurfaceView surfaceView) {
+        if (null == surfaceView) {
+            return;
+        }
+
+        stopSinglePreview();
+        stopPlayback();
+
+        m_iPlaybackID = HCNetSDK.getInstance().NET_DVR_PlayBackByName(m_iLogID, name, surfaceView.getHolder().getSurface());
+        if (m_iPlaybackID < 0) {
+            return;
+        }
+
+        HCNetSDK.getInstance().NET_DVR_PlayBackControl_V40(m_iPlaybackID, HCNetSDK.NET_DVR_PLAYSTART, null, 0, null);
+
+        //海康JNA调用去除移动侦测
+//        m_iPort = HCNetSDKJNAInstance.getInstance().NET_DVR_GetPlayBackPlayerIndex(m_iLogID);
+//        HCNetSDKJNAInstance.getInstance().NET_DVR_GetPlayBackPlayerIndex(m_iPlaybackID_1);
+//        Player.getInstance().renderPrivateData(m_iPort, Player.PRIVATE_RENDER.RENDER_MD, 0);
+    }
+
+    /**
+     * 获取云台协议
+     * @return
+     */
+    public NET_DVR_PTZCFG fetchPTZControl() {
+        NET_DVR_PTZCFG net_dvr_ptzcfg = new NET_DVR_PTZCFG();
+        boolean result = HCNetSDK.getInstance().NET_DVR_GetPTZProtocol(m_iLogID, net_dvr_ptzcfg);
+        if(result) {
+            return net_dvr_ptzcfg;
+        }
+        return null;
+    }
+
+    /**
+     * FIXME 建议修改为按下开始，松开结束
+     * @param opt
+     */
+    public boolean ptzControl(int opt) {
+//        TILT_UP 21 云台上仰
+//        TILT_DOWN 22 云台下俯
+//        PAN_LEFT 23 云台左转
+//                PAN_RIGHT
+        //开始
+        boolean r = HCNetSDK.getInstance().NET_DVR_PTZControl(m_iPlayID, opt, 0);
+        //结束
+        HCNetSDK.getInstance().NET_DVR_PTZControl(m_iPlayID, opt, 1);
+        return r;
+    }
+
+    /**
+     * 调用预览
+     * @param chanNum
+     * @param surfaceView
+     * @param onHikviOptListener
+     */
+    public void startPreview(int chanNum, SurfaceView surfaceView, OnHikviOptListener onHikviOptListener) {
+
+        if (null == surfaceView) {
+            return;
+        }
+
+        try {
+            if (m_iLogID < 0) {
+                Log.e(TAG, "请先登录");
+                return;
+            }
+            if (m_iPlayID < 0) {
+
+                playerHandler = new PlayerHandler(onHikviOptListener);
+                startSinglePreview(chanNum, surfaceView);
+            } else {
+                stopSinglePreview();
+            }
+        } catch (Exception err) {
+            Log.e(TAG, "error: " + err.toString());
+        }
     }
 
     /**
      * 单个预览
      */
-    private void startSinglePreview(int chanNum) {
+    private void startSinglePreview(int chanNum, SurfaceView surfaceView) {
         if (m_iPlaybackID >= 0) {
             Log.i(TAG, "请先停止回放");
-            sendMsg(0, "正在回放，请先停止");
             return;
         }
 
-        RealPlayCallBack fRealDataCallBack = getRealPlayerCbf();
+        RealPlayCallBack fRealDataCallBack = getRealPlayerCbf(surfaceView);
         if (fRealDataCallBack == null) {
             Log.e(TAG, "fRealDataCallBack object is failed!");
-            sendMsg(0, "视频播放失败，请重试");
             return;
         }
         NET_DVR_PREVIEWINFO previewInfo = new NET_DVR_PREVIEWINFO();
@@ -163,20 +278,23 @@ public class HikviUtil {
         if (m_iPlayID < 0) {
             Log.e(TAG, "NET_DVR_RealPlay is failed!Err:"
                     + HCNetSDK.getInstance().NET_DVR_GetLastError());
-            sendMsg(0, "视频播放失败（CODE:" + HCNetSDK.getInstance().NET_DVR_GetLastError() + "），请重试");
             return;
         }
-
-        Log.i(TAG,"单个播放成功 ***********************"+m_iPort+"***************************");
     }
 
-    //停止多个播放
-    private void stopMultiPreview() {
-        int i = 0;
-        for (i = 0; i < 4; i++) {
-            //playView[i].stopPreview();
+    /**
+     * 停止回放
+     */
+    public void stopPlayback() {
+        if (m_iPlaybackID < 0) {
+            return;
         }
-        m_iPlayID = -1;
+        if (!HCNetSDK.getInstance().NET_DVR_StopPlayBack(m_iPlaybackID)) {
+            Log.e(TAG, "停止回放失败!Err:"
+                    + HCNetSDK.getInstance().NET_DVR_GetLastError());
+            return;
+        }
+        m_iPlaybackID = -1;
     }
 
     //停止单个预览
@@ -188,8 +306,6 @@ public class HikviUtil {
         if (!HCNetSDK.getInstance().NET_DVR_StopRealPlay(m_iPlayID)) {
             Log.e(TAG, "停止预览失败!Err:"
                     + HCNetSDK.getInstance().NET_DVR_GetLastError());
-
-            sendMsg(0, "视频停止失败，请重试");
             return;
         }
 
@@ -202,18 +318,15 @@ public class HikviUtil {
         // player stop play
         if (!Player.getInstance().stop(m_iPort)) {
             Log.e(TAG, "停止播放失败!");
-            sendMsg(0, "视频停止失败，请重试");
             return;
         }
 
         if (!Player.getInstance().closeStream(m_iPort)) {
             Log.e(TAG, "关闭播放流失败!");
-            sendMsg(0, "视频停止失败，请重试");
             return;
         }
         if (!Player.getInstance().freePort(m_iPort)) {
             Log.e(TAG, "释放端口失败!" + m_iPort);
-            sendMsg(0, "视频停止失败，请重试");
             return;
         }
         m_iPort = -1;
@@ -278,8 +391,8 @@ public class HikviUtil {
             byte[] status = struChanState.byDigitalChanState;
             for (int i = 0; i < status.length; i++) {
                 byte s = status[i];
-                if(s == 1) {
-                    channelList.add(i+m_iStartChan);
+                if (s == 1) {
+                    channelList.add(i + m_iStartChan);
                 }
             }
         }
@@ -288,6 +401,7 @@ public class HikviUtil {
 
     /**
      * 通道是否在线
+     *
      * @param channel
      * @return
      */
@@ -297,6 +411,7 @@ public class HikviUtil {
 
     /**
      * 获取通道名称,很慢
+     *
      * @param chan
      * @return
      */
@@ -304,10 +419,20 @@ public class HikviUtil {
         NET_DVR_PICCFG_V30 net_dvr_piccfg_v30 = new NET_DVR_PICCFG_V30();
         HCNetSDK.getInstance().NET_DVR_GetDVRConfig(m_iLogID, HCNetSDK.NET_DVR_GET_PICCFG_V30, chan, net_dvr_piccfg_v30);
         byte[] b = net_dvr_piccfg_v30.sChanName;
+        return byte2Str(b);
+    }
+
+    /**
+     * byte转str
+     *
+     * @param b
+     * @return
+     */
+    public static String byte2Str(byte[] b) {
         try {
             int end = 0;
-            for(int i = 0; i < b.length; i++) {
-                if(b[i] == 0) {
+            for (int i = 0; i < b.length; i++) {
+                if (b[i] == 0) {
                     end = i;
                     break;
                 }
@@ -315,10 +440,10 @@ public class HikviUtil {
             byte[] na = new byte[end];
             System.arraycopy(b, 0, na, 0, na.length);
 
-            String s = new String(na,"GB2312");
+            String s = new String(na, "GB2312");
             return s;
         } catch (UnsupportedEncodingException e) {
-            return "Camera"+chan;
+            return null;
         }
     }
 
@@ -341,11 +466,11 @@ public class HikviUtil {
      *
      * @return
      */
-    private RealPlayCallBack getRealPlayerCbf() {
+    private RealPlayCallBack getRealPlayerCbf(SurfaceView surfaceView) {
         RealPlayCallBack cbf = (iRealHandle, iDataType, pDataBuffer, iDataSize) -> {
             // player channel 1
             processRealData(1, iDataType, pDataBuffer,
-                    iDataSize, Player.STREAM_REALTIME);
+                    iDataSize, Player.STREAM_REALTIME, surfaceView);
         };
         return cbf;
     }
@@ -360,83 +485,105 @@ public class HikviUtil {
      * @param iStreamMode
      */
     private void processRealData(int iPlayViewNo, int iDataType,
-                                byte[] pDataBuffer, int iDataSize, int iStreamMode) {
-        if (!m_bNeedDecode) {
-            // Log.i(TAG, "iPlayViewNo:" + iPlayViewNo + ",iDataType:" +
-            // iDataType + ",iDataSize:" + iDataSize);
-            sendMsg(0, "视频播放失败，请重试");
-        } else {
-            if (HCNetSDK.NET_DVR_SYSHEAD == iDataType) {
-                if (m_iPort >= 0) {
-                    return;
-                }
-                m_iPort = Player.getInstance().getPort();
-                if (m_iPort == -1) {
-                    Log.e(TAG, "获取端口失败: "
-                            + Player.getInstance().getLastError(m_iPort));
-                    sendMsg(0, "视频播放失败，请重试");
-                    return;
-                }
-                //取消移动侦测
-                Player.getInstance().renderPrivateData(m_iPort,Player.PRIVATE_RENDER.RENDER_MD,0);
-
-                if (iDataSize > 0) {
-                    if (!Player.getInstance().setStreamOpenMode(m_iPort,iStreamMode)) {
-                        Log.e(TAG, "设置流打开模式失败");
-                        sendMsg(0, "视频播放失败，请重试");
-                        return;
-                    }
-                    if (!Player.getInstance().openStream(m_iPort, pDataBuffer,
-                            iDataSize, 2 * 1024 * 1024)) // open stream
-                    {
-                        Log.e(TAG, "openStream failed");
-                        sendMsg(0, "视频播放失败，请重试");
-                        return;
-                    }
-                    if (!Player.getInstance().play(m_iPort, surfaceView.getHolder())) {
-                        Log.e(TAG, "播放失败");
-                        sendMsg(0, "视频播放失败，请重试");
-                        return;
-                    } else {
-                        sendMsg(3, "视频播放成功");
-                        Log.i(TAG, "播放成功");
-                    }
-                    if (!Player.getInstance().playSound(m_iPort)) {
-                        Log.e(TAG, "播放声音失败:"
-                                + Player.getInstance().getLastError(m_iPort));
-                        sendMsg(-1, "视频声音播放失败");
-                        return;
-                    }
-                }
-            } else {
-                if (!Player.getInstance().inputData(m_iPort, pDataBuffer,
-                        iDataSize)) {
-                    // Log.e(TAG, "inputData failed with: " +
-                    // Player.getInstance().getLastError(m_iPort));
-                    for (int i = 0; i < 4000 && m_iPlaybackID >= 0 && !m_bStopPlayback; i++) {
-                        if (Player.getInstance().inputData(m_iPort,
-                                pDataBuffer, iDataSize)) {
-                            break;
-                        }
-
-                        if (i % 100 == 0) {
-                            Log.e(TAG, "inputData failed with: " + Player.getInstance().getLastError(m_iPort) + ", i:" + i);
-                        }
-
-                        try {
-                            Thread.sleep(10);
-                        } catch (InterruptedException e) {
-                            e.printStackTrace();
-                        }
-                    }
-                }
-
+                                 byte[] pDataBuffer, int iDataSize, int iStreamMode, SurfaceView surfaceView) {
+        if (HCNetSDK.NET_DVR_SYSHEAD == iDataType) {
+            if (m_iPort >= 0) {
+                return;
             }
+            m_iPort = Player.getInstance().getPort();
+            if (m_iPort == -1) {
+                sendMsg(1, "获取端口失败: "
+                        + Player.getInstance().getLastError(m_iPort));
+                return;
+            }
+            //取消移动侦测
+            Player.getInstance().renderPrivateData(m_iPort, Player.PRIVATE_RENDER.RENDER_MD, 0);
+
+            if (iDataSize > 0) {
+                if (!Player.getInstance().setStreamOpenMode(m_iPort, iStreamMode)) {
+                    sendMsg(1, "设置流打开模式失败");
+                    return;
+                }
+                if (!Player.getInstance().openStream(m_iPort, pDataBuffer,
+                        iDataSize, 2 * 1024 * 1024)) // open stream
+                {
+                    sendMsg(1, "流打开模式失败");
+                    return;
+                }
+                if (!Player.getInstance().play(m_iPort, surfaceView.getHolder())) {
+                    sendMsg(1, "播放失败");
+                    return;
+                } else {
+                    sendMsg(0, "播放成功");
+                }
+                if (!Player.getInstance().playSound(m_iPort)) {
+                    Log.e(TAG, "播放声音失败:"
+                            + Player.getInstance().getLastError(m_iPort));
+                    return;
+                }
+            }
+        } else {
+            if (!Player.getInstance().inputData(m_iPort, pDataBuffer,
+                    iDataSize)) {
+                // Log.e(TAG, "inputData failed with: " +
+                // Player.getInstance().getLastError(m_iPort));
+                for (int i = 0; i < 4000 && m_iPlaybackID >= 0 && !m_bStopPlayback; i++) {
+                    if (Player.getInstance().inputData(m_iPort,
+                            pDataBuffer, iDataSize)) {
+                        break;
+                    }
+
+                    if (i % 100 == 0) {
+                        Log.e(TAG, "inputData failed with: " + Player.getInstance().getLastError(m_iPort) + ", i:" + i);
+                    }
+
+                    try {
+                        Thread.sleep(10);
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+                }
+            }
+
         }
     }
 
     public int getIPort() {
         return m_iPort;
+    }
+
+    private void sendMsg(int code, String content) {
+        Message msg = playerHandler.obtainMessage();
+        msg.what = code;
+        msg.obj = content;
+        msg.sendToTarget();
+    }
+
+    /**
+     * 播放的handler
+     */
+    class PlayerHandler extends Handler {
+
+        OnHikviOptListener onHikviOptListener;
+
+        public PlayerHandler(OnHikviOptListener onHikviOptListener) {
+            this.onHikviOptListener = onHikviOptListener;
+        }
+
+        @Override
+        public void handleMessage(@NonNull Message msg) {
+            super.handleMessage(msg);
+            if(null != onHikviOptListener) {
+                switch (msg.what) {
+                    case 0:
+                        onHikviOptListener.finish("播放成功");
+                        break;
+                    case 1:
+                        onHikviOptListener.failed(msg.obj.toString());
+                        break;
+                }
+            }
+        }
     }
 
 }

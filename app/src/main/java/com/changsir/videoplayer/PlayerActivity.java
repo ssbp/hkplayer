@@ -1,187 +1,189 @@
 package com.changsir.videoplayer;
 
-import androidx.annotation.NonNull;
-import androidx.appcompat.app.AppCompatActivity;
-import androidx.constraintlayout.widget.Group;
-
+import android.app.Activity;
+import android.content.Context;
+import android.content.pm.ActivityInfo;
 import android.graphics.PixelFormat;
-import android.os.AsyncTask;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Message;
 import android.util.Log;
-import android.view.Surface;
+import android.view.GestureDetector;
+import android.view.MotionEvent;
+import android.view.ScaleGestureDetector;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
 import android.view.WindowManager;
+import android.view.animation.AccelerateInterpolator;
+import android.widget.CompoundButton;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
 import android.widget.ProgressBar;
+import android.widget.RelativeLayout;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.widget.ToggleButton;
 
-import com.changsir.videoplayer.hikvision.HikviUtil;
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.constraintlayout.widget.ConstraintLayout;
+import androidx.fragment.app.FragmentTransaction;
+
+import com.changsir.videoplayer.hikvision.HikviPresenter;
+import com.changsir.videoplayer.hikvision.HistoryListFragment;
+import com.changsir.videoplayer.hikvision.LiveFragment;
+import com.changsir.videoplayer.hikvision.PlayerActivityInterface;
 import com.changsir.videoplayer.hikvision.VideoModel;
+import com.changsir.videoplayer.hikvision.utils.OnHikviOptListener;
 
-import org.MediaPlayer.PlayM4.Player;
-
-import java.lang.ref.WeakReference;
+import java.util.Calendar;
 
 /**
  * 播放界面
  */
-public class PlayerActivity extends AppCompatActivity implements SurfaceHolder.Callback {
+public class PlayerActivity extends AppCompatActivity implements PlayerActivityInterface, SurfaceHolder.Callback {
 
     private static final String TAG = "PlayerActivity";
     public static final String PLAYER_DATA = "PLAYER_DATA";
+    public static final String FORCE_FULL_SCREEN = "FORCE_FULL_SCREEN";
+    public static final int OPT_SHOW = 1;
 
     private SurfaceView mSurfaceView;
-    private HikviUtil hikviUtil;
     private VideoModel videoModel;
-    private HikviHandler hikviHandler;
     private ProgressBar progressBar;
-    private TextView progressText;
+    private TextView progressText, yearTextView;
+    private ConstraintLayout playerOptLayout;
+    private ConstraintLayout titleOptLayout;
+    private ToggleButton playbackBtn;
+
+
+    private AutoHideOptHandler hideOptHandler;
+    private boolean isOptShow = true;
+
+    //全屏切换
+    private int mVideoHeight = 0;
+    private boolean fullScreen = false;
+    private boolean forceFullScreen = true;
+    private boolean hasTitleBar = true;
+    private RelativeLayout videoLayout;
+
+    private ImageView fullScreenBtn;
+    private ImageView backButton;
+
+    private HistoryListFragment historyListFragment;
+    private LiveFragment liveFragment;
+
+    private HikviPresenter hikviPresenter;
+
+    //缩放手势
+    private ScaleGestureDetector mScaleGestureDetector;
+    private GestureDetector mGestureDetecotr;
+
+    private float optHeight = 0;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_player);
 
+        hasTitleBar = getSupportActionBar().isShowing();
+
+        playbackBtn = findViewById(R.id.playbackBtn);
+        playbackBtn.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(CompoundButton compoundButton, boolean b) {
+                if(b) {
+                    //回看
+                    getPlayBack();
+                } else {
+                    //直播
+                    loadPreview();
+                    getLiveFragment();
+                }
+            }
+        });
+        yearTextView = findViewById(R.id.yearTextView);
         progressBar = findViewById(R.id.hkPlayerProgressBar);
         progressText = findViewById(R.id.hkPlayerProgressText);
+        playerOptLayout = findViewById(R.id.playerOptLayout);
+        titleOptLayout = findViewById(R.id.titleOptLayout);
+
+        //全屏按钮
+        videoLayout = findViewById(R.id.videoLayout);
+        fullScreenBtn = findViewById(R.id.fullScreenBtn);
+        backButton = findViewById(R.id.backButton);
+        backButton.setOnClickListener(view -> finish());
+        fullScreenBtn.setOnClickListener(view -> switchFullScreen());
 
         //保持屏幕常量
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
         mSurfaceView = findViewById(R.id.surfaceView);
         mSurfaceView.getHolder().addCallback(this);
+
+        hideOptHandler = new AutoHideOptHandler();
+        initGestureDetector();
+        optHeight = dip2px(this, 30);
         initData();
+        initFragment();
+    }
+
+    private void initFragment() {
+        historyListFragment = new HistoryListFragment();
+        historyListFragment.setHikviPresenter(hikviPresenter);
+        historyListFragment.setPlayerActivityInterface(this);
+
+        liveFragment = new LiveFragment();
+        liveFragment.setHikviPresenter(hikviPresenter);
+        liveFragment.setPlayerActivityInterface(this);
+
+        getLiveFragment();
     }
 
     private void initData() {
         videoModel = getIntent().getParcelableExtra(PLAYER_DATA);
-        if(null == videoModel) {
+        forceFullScreen = getIntent().getBooleanExtra(FORCE_FULL_SCREEN, true);
+        if (null == videoModel) {
             Toast.makeText(this, "播放数据获取失败", Toast.LENGTH_SHORT).show();
             finish();
             return;
         }
 
-        hikviHandler = new HikviHandler(this);
-        hikviUtil = new HikviUtil(mSurfaceView, hikviHandler);
+        fullScreenBtn.setEnabled(!forceFullScreen);
+        if (forceFullScreen) {
+            switchFullScreen();
+        } else {
+            playerOptLayout.setVisibility(View.VISIBLE);
+        }
+
+        //逻辑处理事件
+        hikviPresenter = new HikviPresenter(videoModel);
+        hikviPresenter.setPlayerActivityInterface(this);
+
+        //设置默认日期
+        Calendar calendar = Calendar.getInstance();
+        updateDate(calendar.get(Calendar.YEAR)+"年"+(calendar.get(Calendar.MONTH)+1)+"月");
     }
 
     private void loadHK() {
         progressBar.setVisibility(View.VISIBLE);
         progressText.setVisibility(View.VISIBLE);
         progressText.setText("正在加载");
-        new Thread(new LoginThread()).start();
+        hikviPresenter.startLogin(onHikviLoginListener);
     }
 
-    /**
-     * 登陆线程
-     */
-    class LoginThread implements Runnable {
-        @Override
-        public void run() {
-
-            sendMsg(1, "正在初始化视频");
-
-            //1.初始化
-            boolean initR = hikviUtil.init(videoModel);
-            if(initR) {
-                sendMsg(1, "正在认证视频信息");
-                //2.登陆
-                if(hikviUtil.loginDevice()!=-1) {
-                    sendMsg(1, "正在检查通道状态");
-                    //3.检查通道
-                    if(hikviUtil.isLiving(videoModel.getChannel())) {
-                        //4.准备播放
-                        sendMsg(2, "正在加载视频");
-                    } else {
-                        sendMsg(0, "当前视频已掉线");
-                    }
-                } else {
-                    sendMsg(0, "认证视频失败");
-                }
-            } else {
-                sendMsg(0, "视频初始化失败");
-            }
-        }
+    private void loadPreview() {
+        hikviPresenter.stopPlayback();
+        hikviPresenter.stopPreview();
+        hikviPresenter.startPreview(mSurfaceView, onPreviewListener);
+        showOptArea(true);
     }
-
-    /**
-     * 发送handler
-     * @param code
-     * @param content
-     */
-    private void sendMsg(int code, String content) {
-        Message msg = hikviHandler.obtainMessage();
-        msg.what = code;
-        msg.obj = content;
-        msg.sendToTarget();
-    }
-
-    /**
-     * 播放线程Handler
-     */
-    public class HikviHandler extends Handler {
-        private final WeakReference<PlayerActivity> mActivity;
-
-        public HikviHandler(PlayerActivity activity) {
-            mActivity = new WeakReference<>(activity);
-        }
-
-        @Override
-        public void handleMessage(@NonNull Message msg) {
-            PlayerActivity activity = mActivity.get();
-            if (activity != null) {
-                int what = msg.what;
-                String content = msg.obj.toString();
-
-                switch(what) {
-                    case 0:
-                        //失败
-                        Toast.makeText(activity,content, Toast.LENGTH_SHORT).show();
-                        finish();
-                        break;
-                    case 1:
-                        //成功
-                        progressText.setText(content);
-                        break;
-                    case 2:
-                        //5.调用预览
-                        progressText.setText(content);
-                        hikviUtil.startPreview(videoModel.getChannel());
-                        break;
-                    case 3:
-                        //播放成功
-                        progressBar.setVisibility(View.GONE);
-                        progressText.setVisibility(View.GONE);
-                        break;
-                    case -1:
-                        //错误，只弹出内容
-                        Toast.makeText(activity,content, Toast.LENGTH_SHORT).show();
-                        break;
-                }
-            }
-        }
-    }
-
 
     @Override
     public void surfaceCreated(SurfaceHolder holder) {
         Log.e(TAG, "创建视频窗口");
-        int m_iPort = hikviUtil.getIPort();
         mSurfaceView.getHolder().setFormat(PixelFormat.TRANSLUCENT);
-        if (-1 == m_iPort) {
-            return;
-        }
-        Surface surface = holder.getSurface();
-        if (true == surface.isValid()) {
-            if (false == Player.getInstance()
-                    .setVideoWindow(m_iPort, 0, holder)) {
-                Log.e(TAG, "Player setVideoWindow failed!");
-            }
-        }
+        hikviPresenter.surfaceChange(holder);
     }
 
     @Override
@@ -190,42 +192,21 @@ public class PlayerActivity extends AppCompatActivity implements SurfaceHolder.C
 
     @Override
     public void surfaceDestroyed(SurfaceHolder holder) {
-        int m_iPort = hikviUtil.getIPort();
-        Log.e(TAG, "释放播放端口!" + m_iPort);
-        if (-1 == m_iPort) {
-            return;
-        }
-        if (true == holder.getSurface().isValid()) {
-            if (false == Player.getInstance().setVideoWindow(m_iPort, 0, null)) {
-                Log.e(TAG, "播放端口释放失败!");
-            }
-        }
-
         Log.e(TAG, "停止预览");
-        hikviUtil.stopSinglePreview();
+        hikviPresenter.surfaceDestory(holder);
     }
 
     @Override
     protected void onDestroy() {
-        new Thread(new DestoryHkhandler()).start();
+        hikviPresenter.destory();
         Log.e(TAG, "销毁资源");
         super.onDestroy();
     }
 
-    class DestoryHkhandler implements Runnable {
-        @Override
-        public void run() {
-            Log.e(TAG, "开始销毁资源");
-            hikviHandler.removeCallbacksAndMessages(null);
-            hikviUtil.logoutDevice();
-            hikviUtil.destory();
-        }
-    }
-
     @Override
     protected void onPause() {
-        //暂停播放
-        hikviUtil.stopSinglePreview();
+        hikviPresenter.stopPreview();
+        hikviPresenter.stopPlayback();
         super.onPause();
     }
 
@@ -235,4 +216,266 @@ public class PlayerActivity extends AppCompatActivity implements SurfaceHolder.C
         loadHK();
         super.onResume();
     }
+
+    /**
+     * 获取回放列表
+     */
+    private void getPlayBack() {
+        FragmentTransaction fragmentTransaction = getSupportFragmentManager().beginTransaction();
+        fragmentTransaction.replace(R.id.fragmentLayout, historyListFragment);
+        fragmentTransaction.commit();
+    }
+
+    /**
+     * 获取操作界面
+     */
+    private void getLiveFragment() {
+        FragmentTransaction fragmentTransaction = getSupportFragmentManager().beginTransaction();
+        fragmentTransaction.replace(R.id.fragmentLayout, liveFragment);
+        fragmentTransaction.commit();
+    }
+
+    /**
+     * 切换全屏
+     */
+    private void switchFullScreen() {
+        if (!fullScreen) {
+            //切换到全屏模式
+            getSupportActionBar().hide();
+            //添加一个全屏的标记
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
+            //请求横屏
+            setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
+
+            //设置视频播放控件的布局的高度是match_parent
+            LinearLayout.LayoutParams layoutParams = (LinearLayout.LayoutParams) videoLayout.getLayoutParams();
+            //将默认的高度缓存下来
+            mVideoHeight = layoutParams.height;
+            layoutParams.height = RelativeLayout.LayoutParams.MATCH_PARENT;
+            videoLayout.setLayoutParams(layoutParams);
+            fullScreen = true;
+            titleOptLayout.setVisibility(View.VISIBLE);
+        } else {
+            //切换到默认模式
+            //清除全屏标记
+            if (hasTitleBar) {
+                getSupportActionBar().show();
+            }
+
+            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
+            //请求纵屏
+            setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+
+            //设置视频播放控件的布局的高度是200
+            LinearLayout.LayoutParams layoutParams = (LinearLayout.LayoutParams) videoLayout.getLayoutParams();
+            layoutParams.height = mVideoHeight;  //这里的单位是px
+            videoLayout.setLayoutParams(layoutParams);
+
+            fullScreen = false;
+            titleOptLayout.setVisibility(View.GONE);
+        }
+    }
+
+    @Override
+    public void hideProgress() {
+        progressBar.setVisibility(View.GONE);
+        progressText.setVisibility(View.GONE);
+    }
+
+    @Override
+    public void playCallBacy(String name) {
+        if (null != hikviPresenter) {
+            showOptArea(true);
+            hikviPresenter.startPlayback(name, mSurfaceView);
+        }
+    }
+
+    @Override
+    public void updateDate(String date) {
+        yearTextView.setText(date);
+    }
+
+    @Override
+    public void updateProgress(String content) {
+        progressText.setText(content);
+    }
+
+    /**
+     * 登录监听
+     */
+    private OnHikviOptListener onHikviLoginListener = new OnHikviOptListener() {
+        @Override
+        public void failed(String content) {
+            Toast.makeText(getApplicationContext(), content, Toast.LENGTH_SHORT).show();
+            setResult(Activity.RESULT_OK);
+            PlayerActivity.this.finish();
+        }
+
+        @Override
+        public void finish(String content) {
+            hikviPresenter.startPreview(mSurfaceView, onPreviewListener);
+            showOptArea(true);
+        }
+
+        @Override
+        public void process(String content) {
+            progressText.setText(content);
+        }
+    };
+
+    /**
+     * 预览事件
+     */
+    private OnHikviOptListener onPreviewListener = new OnHikviOptListener() {
+        @Override
+        public void failed(String content) {
+
+        }
+
+        @Override
+        public void finish(String content) {
+            hideProgress();
+        }
+
+        @Override
+        public void process(String content) {
+
+        }
+    };
+
+    class AutoHideOptHandler extends Handler {
+        @Override
+        public void handleMessage(Message msg) {
+            super.handleMessage(msg);
+            if (msg.what == OPT_SHOW) {
+                showOptArea(false);
+            }
+        }
+    }
+
+    /**
+     * 隐藏还是显示操作区域
+     *
+     * @param show
+     */
+    private void showOptArea(boolean show) {
+
+        float toY = show ? 0 : optHeight;
+
+        if (show) {
+            hideOptHandler.removeMessages(OPT_SHOW);
+            Message msg = hideOptHandler.obtainMessage(OPT_SHOW);
+            hideOptHandler.sendMessageDelayed(msg, 5000);
+        }
+
+        //没有强制全屏时，才会显示全屏和非全屏切换
+        if (!forceFullScreen) {
+            playerOptLayout.animate()
+                    .setDuration(200)
+                    .translationY(toY)
+                    .setInterpolator(new AccelerateInterpolator())
+                    .start();
+        }
+
+        isOptShow = show;
+
+        showTitleArea(show);
+    }
+
+    /**
+     * 显示标题
+     *
+     * @param show
+     */
+    private void showTitleArea(boolean show) {
+        float toY = show ? 0 : -optHeight;
+        if (show) {
+            hideOptHandler.removeMessages(OPT_SHOW);
+            Message msg = hideOptHandler.obtainMessage(OPT_SHOW);
+            hideOptHandler.sendMessageDelayed(msg, 5000);
+        }
+
+        titleOptLayout.animate()
+                .setDuration(200)
+                .translationY(toY)
+                .setInterpolator(new AccelerateInterpolator())
+                .start();
+    }
+
+    /**
+     * 初始化手势
+     */
+    private void initGestureDetector() {
+//        mScaleGestureDetector = new ScaleGestureDetector(getBaseContext(), new ScaleGestureDetector.SimpleOnScaleGestureListener() {
+//            @Override
+//            public boolean onScaleBegin(ScaleGestureDetector detector) {
+//                return true;
+//            }
+//
+//            @Override
+//            public boolean onScale(ScaleGestureDetector detector) {
+//
+//                if(allwoOpt) {
+//                    float s = detector.getScaleFactor();
+//                    if (s > 1.0f) {
+//                        optCamera("ZOOM_IN");
+//                    }
+//                    if (s < 1.0f) {
+//                        optCamera("ZOOM_OUT");
+//                    }
+//                }
+//
+//                return true;
+//            }
+//
+//            @Override
+//            public void onScaleEnd(ScaleGestureDetector detector) {
+//            }
+//        });
+
+        mGestureDetecotr = new GestureDetector(getBaseContext(), new GestureDetector.SimpleOnGestureListener() {
+            @Override
+            public boolean onScroll(MotionEvent e1, MotionEvent e2, float distanceX, float distanceY) {
+//                String cmd;
+//                if(allwoOpt) {
+//                    if (Math.abs(distanceX) > Math.abs(distanceY)) {
+//                        //选择x方向
+//                        cmd = distanceX > 0 ? "RIGHT" : "LEFT";
+//                    } else {
+//                        //选择y方向
+//                        cmd = distanceY > 0 ? "DOWN" : "UP";
+//                    }
+//
+//                    if (null != cmd) {
+//                        optCamera(cmd);
+//                    }
+//                }
+
+                return super.onScroll(e1, e2, distanceX, distanceY);
+            }
+
+            @Override
+            public boolean onSingleTapUp(MotionEvent e) {
+                //单击，操作区域是否显示
+                showOptArea(!isOptShow);
+                return super.onSingleTapUp(e);
+            }
+
+        });
+
+        //绑定播放器事件
+        mSurfaceView.setOnTouchListener(new View.OnTouchListener() {
+            @Override
+            public boolean onTouch(View view, MotionEvent motionEvent) {
+                return mGestureDetecotr.onTouchEvent(motionEvent);
+            }
+        });
+
+    }
+
+    public static int dip2px(Context context, float dpValue) {
+        float scale = context.getResources().getDisplayMetrics().density;
+        return (int) (dpValue * scale + 0.5f);
+    }
+
 }

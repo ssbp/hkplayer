@@ -1,2 +1,10 @@
 <resources>
+
+
+    <!-- TODO: Remove or change this placeholder text -->
+    <string name="hello_blank_fragment">Hello blank fragment</string>
+    <string name="video_history">录像回看</string>
+    <string name="is_loading">正在加载</string>
+    <string name="live">直播</string>
+    <string name="back_play">回看</string>
 </resources>
