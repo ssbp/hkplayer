@@ -86,7 +86,8 @@ public class PlayerActivity extends AppCompatActivity implements PlayerActivityI
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_player);
 
-        hasTitleBar = getSupportActionBar().isShowing();
+        if(null != getSupportActionBar())
+            hasTitleBar = getSupportActionBar().isShowing();
 
         playbackBtn = findViewById(R.id.playbackBtn);
         playbackBtn.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
@@ -241,7 +242,8 @@ public class PlayerActivity extends AppCompatActivity implements PlayerActivityI
     private void switchFullScreen() {
         if (!fullScreen) {
             //切换到全屏模式
-            getSupportActionBar().hide();
+            if(null != getSupportActionBar())
+                getSupportActionBar().hide();
             //添加一个全屏的标记
             getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
             //请求横屏
@@ -258,7 +260,7 @@ public class PlayerActivity extends AppCompatActivity implements PlayerActivityI
         } else {
             //切换到默认模式
             //清除全屏标记
-            if (hasTitleBar) {
+            if (hasTitleBar && null != getSupportActionBar()) {
                 getSupportActionBar().show();
             }
 
