@@ -162,7 +162,7 @@ public class HistoryListFragment extends Fragment {
     private void setHistoryClickListener(View view, NET_DVR_FINDDATA_V30 data) {
         view.setOnClickListener(view1 -> {
             if(null != playerActivityInterface) {
-                playerActivityInterface.playCallBacy(HikviUtil.byte2Str(data.sFileName));
+                playerActivityInterface.playCallBack(HikviUtil.byte2Str(data.sFileName));
             }
         });
     }

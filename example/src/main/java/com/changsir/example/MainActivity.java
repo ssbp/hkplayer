@@ -35,7 +35,6 @@ public class MainActivity extends AppCompatActivity {
             methodRequiresTwoPermission();
             needRefresh = false;
         }
-
     }
 
     @Override
@@ -56,7 +55,7 @@ public class MainActivity extends AppCompatActivity {
         videoModel.setAddress("220.180.188.245");
         videoModel.setPasswd("dyhb12345");
         videoModel.setUsername("admin");
-        videoModel.setPort(8083);
+        videoModel.setPort(8000);
         videoModel.setChannel(33);
         intent.putExtra(PlayerActivity.PLAYER_DATA, videoModel);
         intent.putExtra(PlayerActivity.FORCE_FULL_SCREEN, false);

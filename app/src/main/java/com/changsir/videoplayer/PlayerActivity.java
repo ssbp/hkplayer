@@ -285,7 +285,7 @@ public class PlayerActivity extends AppCompatActivity implements PlayerActivityI
     }
 
     @Override
-    public void playCallBacy(String name) {
+    public void playCallBack(String name) {
         if (null != hikviPresenter) {
             showOptArea(true);
             hikviPresenter.startPlayback(name, mSurfaceView);
