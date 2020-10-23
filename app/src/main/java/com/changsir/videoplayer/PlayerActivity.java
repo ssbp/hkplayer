@@ -55,8 +55,6 @@ public class PlayerActivity extends AppCompatActivity implements PlayerActivityI
     private ConstraintLayout playerOptLayout;
     private ConstraintLayout titleOptLayout;
     private ToggleButton playbackBtn;
-
-
     private AutoHideOptHandler hideOptHandler;
     private boolean isOptShow = true;
 
